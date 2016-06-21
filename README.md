@@ -1,4 +1,6 @@
 # Gulf [![Build Status](https://travis-ci.org/marcelklehr/gulf.png)](https://travis-ci.org/marcelklehr/gulf)
+
+[![Join the chat at https://gitter.im/marcelklehr/gulf](https://badges.gitter.im/marcelklehr/gulf.svg)](https://gitter.im/marcelklehr/gulf?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
 OT is too hard on you? The Gulf stream will sync your documents in real-time. Anywhere in the world, in node.js and the browser!
 
 ![Gulf stream (Public domain)](https://upload.wikimedia.org/wikipedia/commons/1/19/Golfstrom.jpg)
@@ -54,27 +56,35 @@ net.connect(7453, function(socket) {
 
 And they'll stay in sync.
 
+### Extensions
+You can sync any document type you have an ot type implementation for. Currently available packages are wrappers for:
+
+ * [contenteditable](https://github.com/marcelklehr/gulf-contenteditable) (using DOM OT)
+ * [textarea/textinput](https://github.com/marcelklehr/gulf-textarea) (using text OT)
+ * [codemirror](https://github.com/marcelklehr/gulf-codemirror) (using text OT)
+
+### Above and Beyond
+Check out [Hive.js](http://hivejs.org) a collaboration platform with gulf at its core.
+
 ## Usage
 
 ## Documents
-A document may contain arbitrary data (as long as you provide an ottype that can handle that kind of data, but we're getting ahead of ourselves). The content of a document is available in `myDocument.content` (which is read-only for you!) and that's basically all a document can do.
+A document may contain arbitrary data. The content of a document is available in `myDocument.content` (which is read-only!).
 
 Now, how do I change this document if `Document#content` is untouchable? Well, thankfully there's also EditableDocuments.
 
-Editable documents can be updated via the `update(cs)` method. The `cs` stands for changeset. A changeset contains the changes to a document. (There are many ways you can create such a changeset, right now we use the simple method of imagination: *bling* -- there it is, see it?)
+Editable documents can be updated via the `update(cs)` method. The `cs` is short for changeset. A changeset contains the changes to a document. (There are quite a few ways you can create such a changeset, all specific to the OT implementation you're using, right now we use the simple method of imagination: *bling* -- there it is, see it?)
 
 Ok, now we update our editable document and we notice that it keeps a record of all revisions -- all documents remember every change ever done. Nice.
 
 ## Linking documents
-Now, Alice and Bob each have a document, actually it's "the same" document. At least it should be, oh -- wait: Bob has made some changes to his version, and Alice of course couldn't resist to write some introductory paragraph again.
+Now, Alice and Bob each have a document and want to sync them. For this, we need some kind of mediator document that takes care of the syncing process to keep things sane. In gulf this mediator is called the master document. It has the final say in which edit is accepted and how the edits are ordered.
 
-Now it's not the same document anymore -- but if we connect the two, they'll always be in sync, right? We just need some kind of mediator that takes care of the syncing process to keep things sane (imagine, if David had changed his document, too!).
+Now, somehow Alice and Bob need to link their documents to that master document in order to send it the changes they make.
 
-This mediator is also in possession of, surprise, a Document. It's doesn't need to be editable, though. Now, somehow Alice and Bob need to link their documents to that master document and send it the changes they make.
+Well, Links we have. If Alice wants to connect to the master document, she creates a master link to it. The master document attaches Alice's link as a slave link.
 
-Well, Links we have. If Alice wants to connect to the master document, she creates a Link to it and attaches it to her document as a master link. The master document attaches Alice's link as a slave link.
-
-A document can have many slave links, but only one master link ( EditableDocuments have no slave links, but you can always put another document in front of them).
+A document can have many slaves, but only one master link (EditableDocuments have no slave links).
 
 Now that we've connected all documents, every time Alice or Bob make a change the edits will just flow to the other documents.
 
@@ -82,10 +92,14 @@ Now that we've connected all documents, every time Alice or Bob make a change th
 Since we're in a globalized world we can't expect all documents to be on the same machine. That's why a Link is a simple DuplexStream. You may pipe it to a tcp socket or a websocket or some other stream. Of course that means that you need two instances of a Link -- one for each side of the connection.
 
 ```js
-masterDoc = new gulf.Document(adapter, ot)
-
-socket.pipe(masterDoc.slaveLink()).pipe(socket)
+gulf.Document.create(adapter, ot, initialContents, (er, masterDoc) => {
+  net.createserver((socket) => {
+    socket.pipe(masterDoc.slaveLink()).pipe(socket) // for each socket
+  }).listen(1234)
+})
 ```
+
+The master doc has the final say in whether an edit is accepted, and so it always holds what you can consider the actual document contents, the *absolute truth* if you will. Thus you must initialize it with the initial document contents, otherwise no one will know where to start from.
 
 ```js
 slaveDoc = new gulf.Document(adapter, ot)
@@ -117,7 +131,7 @@ document._collectChanges = functioncb() {
 }
 ```
 
-Before anything can happen, the document is initialized wwith `_setContents`.
+Before anything can happen, the editable document is initialized wwith `_setContents`.
 
 Everytime the document is changed by an incoming edit `_change` is called with the changeset.
 
@@ -150,6 +164,16 @@ Currently implemented adapters are:
  * [In-memory adapter](https://github.com/marcelklehr/gulf/blob/master/lib/MemoryAdapter.js)
  * [mongoDB adapter](https://github.com/marcelklehr/gulf-mongodb)
 
+If you'd like to write your own storage adapter, head on to the API docs.
+
+## Examples
+It's probably easiest to observe gulf in action. So, have a look at these examples.
+
+ * https://gist.github.com/marcelklehr/0430be7e3fb45a83189b -- a small html page with two contenteditables that are synced.
+ * https://github.com/marcelklehr/warp -- a complete web server serving a collaborative editor, driven by CKeditor, sockJS and gulf-contenteditable
+
+**Additions wanted:** If you have the perfect example show-casing gulf or its related libraries leave me a note via email or [the issues](https://github.com/marcelklehr/gulf/issues).
+
 ## API
 
 ### Class: gulf.Link
@@ -157,8 +181,55 @@ Currently implemented adapters are:
 #### new gulf.Link([opts:Object])
 Instantiates a new link, optionally with some options:
  * `opts.credentials` The credentials to be sent to the other end for authentication purposes.
- * `opts.authorizeWrite` A function which gets called when the other end writes a message, and has the following signature: `function (msg, receivedCredentials, cb)`
- * `opts.authorizeRead` A function which gets called when this side of the link writes a message, and has the following signature: `function (msg, receivedCredentials, cb)`
+ * `opts.authenticate` A functon which gets called with the credentials from the other side and has the following signature: `(credentials, cb(er, user))`
+ * `opts.authorizeWrite` A function which gets called when the other end writes a message, and has the following signature: `(msg, user, cb(er, granted))`; `user` is the value returned by your `authenticate` hook.
+ * `opts.authorizeRead` A function which gets called when this side of the link writes a message, and has the following signature: `(msg, user, cb(er, granted))`; `user` is the value returned by your `authenticate` hook.
+
+The return value of `opts.authenticate` is also used as the author field when saving snapshots.
+
+Here's an example of how to setup link authentication and authorization:
+
+```js
+var link = new gulf.Link({
+  authenticate: function(credentials, cb) {
+    authenticate('token', credentials)
+    .then((userId) => {
+      cb(null, userId)
+    })
+    .catch(cb)
+  }
+, authorizeWrite: function(msg, userId, cb) {
+    switch(msg[0]) {
+      case 'edit':
+        authorize(userId, 'document:change')
+        .then(allowed => cb(null, allowed))
+        .catch(cb)
+        break;
+      case 'ack':
+      case 'requestInit':
+        authorize(userId, 'document:read')
+        .then(allowed => cb(null, allowed))
+        .catch(cb)
+        break;
+    }
+  }
+, authorizeRead:function(msg, userId, cb) {
+    switch(msg[0]) {
+      case 'init':
+      case 'edit':
+        authorize(userId, 'document:read')
+        .then(allowed => cb(null, allowed))
+        .catch(cb)
+        break;
+      case 'ack':
+        authorize(userId, 'document:change')
+        .then(allowed => cb(null, allowed))
+        .catch(cb)
+        break;
+    }
+  }
+})
+```
 
 ### Class: gulf.Document
 
@@ -174,8 +245,8 @@ Instantiates a new, empty Document.
 #### gulf.Document.create(adapter, ottype, contents, cb)
 Creates a documents with pre-set contents. `cb` will be called with `(er, doc)`.
 
-#### gulf.Document.load(adapter, ottype, cb)
-Loads a document from the storage. Since there's one instance of a storage adapter per document, you need to pass the information *which* document to load to the adapter instance. `cb` will be called with `(er, doc)`.
+#### gulf.Document.load(adapter, ottype, documentId, cb)
+Loads a document from the storage. `cb` will be called with `(er, doc)`.
 
 #### gulf.Document#slaveLink(opts:Object) : Link
 Creates a link with `opts` passed to the Link constructor and attaches it as a slave link.
@@ -260,13 +331,27 @@ Serializes this edit.
 #### gulf.Edit#clone() : Edit
 Returns a new edit instance that has exactly the same properties as this one.
 
-## FAQ
+### Adapter
+A snapshot is an object that looks like this:
 
-How does it work? Gulf uses operational transformation, which is all about making edits fit. Node.js streams make sure linking documents is a pure joy. Everything else is in teh codez.
+```js
+{
+  id: 'sdgh684eb68eth'
+, changes: '[0, "h"]'
+, parent: '5dfhg68aefh65ae' // ID of another snapshot
+, contents: '"Hello world"' // stringified representation of the new contents
+, author: 12 // The id of the author, as returned by `opts.authenticate` in the Link options (or the value you passed to gulf.Document#receiveEdit, if you passed in the edit directly)
+}
+```
 
-Does it support peer-to-peer linking? No.
+If you're having trouble writing your own adapter, check out [the in-memory adapter](https://github.com/marcelklehr/gulf/blob/master/lib/MemoryAdapter.js) and the [mongoDB adapter](https://github.com/marcelklehr/gulf-mongodb).
 
-Why? Well, Peer-to-peer is a pain-in-the-ass scenario with operational transformation and not at all performant. If you have a peer-to-peer scenario electing a master might be easier.
+#### Adapter#createDocument(initialSnapshot, cb(er, docId))
+#### Adapter#getFirstSnapshot(docId, cb(er, snapshot))
+#### Adapter#getLatestSnapshot(docId, cb(er, snapshot))
+#### Adapter#storeSnapshot(docId, snapshot, cb(er))
+#### Adapter#existsSnapshot(docId, editId, cb(er, exists:Bool))
+#### Adapter#getSnapshotsAfter(docId, editId, cb(er, snapshots:Array))
 
 ## Tests?
 ```
@@ -274,6 +359,6 @@ Why? Well, Peer-to-peer is a pain-in-the-ass scenario with operational transform
 ```
 
 ## License
-(c) 2013-2015 by Marcel Klehr
+(c) 2013-2016 by Marcel Klehr
 
-GNU General Public License
+GNU Lesser General Public License

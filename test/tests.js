@@ -1,4 +1,4 @@
-/* global xdescribe, describe, it, xit */
+/* global describe, xdescribe, it, xit */
 var gulf, expect
   , ottype = require('ottypes').text
   , MuxDmx = require('mux-dmx')
@@ -172,8 +172,8 @@ describe('gulf', function() {
           cb()
         }
 
-        linkA = docA.masterLink()
-        linkB = docB.masterLink()
+        linkA = docA.masterLink(/*{timeout: 3000}*/)
+        linkB = docB.masterLink(/*{timeout: 3000}*/)
         cb()
       })
     })
@@ -201,6 +201,7 @@ describe('gulf', function() {
       }, 20)
     })
 
+    var slaveB
     it('should correctly propagate edits from one end to the other end', function(cb) {
       linkA.unpipe()
       linkB.unpipe()
@@ -221,7 +222,7 @@ describe('gulf', function() {
 
       setImmediate(function() {
         linkA.pipe(masterDoc.slaveLink()).pipe(linkA)
-        linkB.pipe(masterDoc.slaveLink()).pipe(linkB)
+        linkB.pipe(slaveB = masterDoc.slaveLink()).pipe(linkB)
       })
 
       setTimeout(function() {
@@ -231,35 +232,36 @@ describe('gulf', function() {
     })
 
     it('should catch up on reconnect', function(cb) {
+      this.timeout(12500)
+    
       // disconnect B
       linkB.unpipe()
-      masterDoc.links[3].unpipe()
+      slaveB.unpipe()
 
       contentA = 'abcdx1324'
-      docA.update([4, 'x']) // this edit will be sent
+      docA.update([4, 'x']) // this edit will be sent from A -> Master |-> B
 
       contentB = 'abcd1324QR'
-      docB.update([8, 'Q'])
-      docB.update([9, 'R'])
+      docB.update([8, 'Q']) // these edits will be sent from B |-> Master -> A
+      setImmediate(function() {
+        docB.update([9, 'R'])
+      })
 
       setTimeout(function() {
+        expect(masterDoc.content).to.equal('abcdx1324')
+
         // reconnect B
-        console.log('reconnect B')
         linkB.pipe(masterDoc.slaveLink()).pipe(linkB)
 
-        // change A
-        contentA = 'abcdxy1324'
-        docA.update([5, 'y'])
         setTimeout(function() {
-          expect(contentB).to.equal('abcdxy1324QR')
-          expect(contentB).to.equal(contentA)
+          expect(contentA).to.equal('abcdx1324RQ')
           cb()
-        }, 100)
-      }, 100)
+        }, 1000)
+      }, 1000)
     })
   })
 
-  describe('Linking to protected documents', function() {
+  describe('Linking to documents protected by authentication', function() {
     var docA, docB
     var linkA, linkB
 
@@ -268,13 +270,8 @@ describe('gulf', function() {
         docA = doc
         docB = new gulf.Document(new gulf.MemoryAdapter, ottype)
         linkA = docA.slaveLink({
-          authorizeRead: function(msg, credentials, cb) {
-            if(credentials == 'rightCredentials') return cb(null, true)
-            else return cb(null, false)
-          }
-        , authorizeWrite: function(msg, credentials, cb) {
-            if(credentials == 'rightCredentials') return cb(null, true)
-            else return cb(null, false)
+          authenticate: function(credentials, cb) {
+            cb(null, credentials == 'rightCredentials')
           }
         })
         cb()
@@ -291,12 +288,62 @@ describe('gulf', function() {
       }, 100)
     })
 
-    it('should not adopt the current document state if athentication failed', function(done) {
+    it('should not adopt the current document state if authentication failed', function(done) {
       linkB = docB.masterLink({credentials: 'wrongCredentials'})
       linkA.pipe(linkB).pipe(linkA)
 
       setTimeout(function() {
         expect(docB.content).to.eql(null)
+        done()
+      }, 100)
+    })
+  })
+  
+  describe('Linking to documents protected by write authorization', function() {
+    var docA, docB
+    var linkA, linkB
+    var initialContents = 'abc'
+
+    beforeEach(function(cb) {
+      gulf.Document.create(new gulf.MemoryAdapter, ottype, initialContents, function(er, doc) {
+        docA = doc
+        docB = new gulf.EditableDocument(new gulf.MemoryAdapter, ottype)
+        docB._setContents = function(content, cb) {cb()}
+        docB._change = function(cs, cb) {cb()}
+        
+        linkA = docA.slaveLink({
+          authenticate: function(credentials, cb) {
+            cb(null, credentials == 'rightCredentials')
+          }
+        , authorizeWrite: function(msg, user, cb) {
+            if(msg[0] === 'requestInit'|| msg[0] === 'ack') return cb(null, true)
+            cb(null, false)
+          }
+        })
+        cb()
+      })
+    })
+
+    it('should adopt the current document state correctly', function(done) {
+      linkB = docB.masterLink({credentials: 'rightCredentials'})
+      linkA.pipe(linkB).pipe(linkA)
+
+      setTimeout(function() {
+        expect(docA.content).to.eql(docB.content)
+        done()
+      }, 100)
+    })
+
+    it('should not accept edits', function(done) {
+      linkB = docB.masterLink({credentials: 'rightCredentials'})
+      linkA.pipe(linkB).pipe(linkA)
+      
+      setImmediate(function() {
+        docB.update([3,'d'])
+      })
+
+      setTimeout(function() {
+        expect(docB.content).to.eql(initialContents)
         done()
       }, 100)
     })
@@ -398,7 +445,7 @@ describe('gulf', function() {
         console.log(contentA, contentB)
         expect(contentB).to.eql(contentA)
         cb()
-      }, 500)
+      }, 1000)
     })
 
     after(function() {

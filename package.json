@@ -7,8 +7,9 @@
     "url": "https://github.com/marcelklehr/gulf.git"
   },
   "dependencies": {
+    "queue": "3.x",
     "setimmediate": "1.x",
-    "queue": "3.x"
+    "underscore": "^1.8.3"
   },
   "keywords": [
     "operational transformation",
